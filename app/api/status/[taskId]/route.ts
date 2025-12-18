@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { prisma } from '@/lib/prisma';
 
 export async function GET(
     req: NextRequest,
@@ -25,7 +26,6 @@ export async function GET(
         }
 
         // Query Sora2API for task status
-        // 使用正确的查询端点：/v1/video/query?id={taskId}
         const response = await fetch(`${apiEndpoint}/v1/video/query?id=${taskId}`, {
             method: 'GET',
             headers: {
@@ -59,32 +59,35 @@ export async function GET(
         });
 
         // Map API response to our format
-        // 根据文档，API 返回的字段是：id, status, video_url, enhanced_prompt, status_update_time
         const result = {
             taskId: data.id,
-            status: data.status, // 可能的值：pending, processing, completed, failed
+            status: data.status, // pending, processing, completed, failed
             videoUrl: data.video_url || null,
-            thumbnailUrl: null, // 文档中没有提到缩略图字段
+            thumbnailUrl: data.cover_url || null, // 尝试获取封面图，如果没有则为null
             progress: data.status === 'completed' ? 100 :
-                     data.status === 'processing' ? 50 : 0,
+                data.status === 'processing' ? 50 : 0,
             estimatedTime: data.status === 'pending' ? 60 : null,
             error: data.status === 'failed' ? '任务失败' : null,
             enhancedPrompt: data.enhanced_prompt,
             statusUpdateTime: data.status_update_time,
         };
 
-        // TODO: Update database
-        // if (data.status === 'completed' || data.status === 'failed') {
-        //     await prisma.video.update({
-        //         where: { taskId },
-        //         data: {
-        //             status: data.status,
-        //             videoUrl: result.videoUrl,
-        //             thumbnailUrl: result.thumbnailUrl,
-        //             error: result.error,
-        //         },
-        //     });
-        // }
+        // Update database if status changed or completed
+        if (data.status === 'completed' || data.status === 'failed') {
+            try {
+                await prisma.video.update({
+                    where: { taskId: taskId },
+                    data: {
+                        status: data.status,
+                        videoUrl: result.videoUrl,
+                        thumbnailUrl: result.thumbnailUrl,
+                    },
+                });
+            } catch (dbError) {
+                console.error('Failed to update video status in DB:', dbError);
+                // Don't fail the request if DB update fails, just log it
+            }
+        }
 
         return NextResponse.json(result);
 
